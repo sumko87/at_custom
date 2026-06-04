@@ -1,55 +1,58 @@
 import os
 import httpx
 from fastmcp import FastMCP
+from fastmcp.server.auth import OAuthProxy
+from fastmcp.server.auth.providers.debug import DebugTokenVerifier
+from fastmcp.server.dependencies import get_access_token
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
 AIRTABLE_API = "https://api.airtable.com/v0"
+BASE_URL = os.environ["PUBLIC_BASE_URL"]  # https://at-custom.onrender.com
 
-mcp = FastMCP("Airtable MCP")
+auth = OAuthProxy(
+    upstream_authorization_endpoint="https://airtable.com/oauth2/v1/authorize",
+    upstream_token_endpoint="https://airtable.com/oauth2/v1/token",
+    upstream_client_id=os.environ["AIRTABLE_CLIENT_ID"],
+    upstream_client_secret=os.environ["AIRTABLE_CLIENT_SECRET"],
+    base_url=BASE_URL,
+    redirect_path="/auth/callback",
+    token_verifier=DebugTokenVerifier(),
+)
+
+mcp = FastMCP("Airtable MCP", auth=auth)
 
 
-def _client() -> httpx.Client:
-    pat = os.environ.get("AIRTABLE_PAT")
-    if not pat:
-        raise RuntimeError("AIRTABLE_PAT is not set")
-    return httpx.Client(
-        base_url=AIRTABLE_API,
-        headers={"Authorization": f"Bearer {pat}"},
-        timeout=30.0,
-    )
+def _headers() -> dict:
+    token = get_access_token().token
+    return {"Authorization": f"Bearer {token}"}
 
 
 @mcp.tool
-def list_bases() -> dict:
+async def list_bases() -> dict:
     """List all Airtable bases the authenticated user can access."""
-    with _client() as c:
-        r = c.get("/meta/bases")
+    async with httpx.AsyncClient(base_url=AIRTABLE_API, headers=_headers(), timeout=30.0) as c:
+        r = await c.get("/meta/bases")
         r.raise_for_status()
         return r.json()
 
 
 @mcp.tool
-def list_records(base_id: str, table: str, max_records: int = 20) -> dict:
+async def list_records(base_id: str, table: str, max_records: int = 20) -> dict:
     """List records from a table. `table` may be a table name or table ID (tbl...)."""
-    with _client() as c:
-        r = c.get(f"/{base_id}/{table}", params={"maxRecords": max_records})
+    async with httpx.AsyncClient(base_url=AIRTABLE_API, headers=_headers(), timeout=30.0) as c:
+        r = await c.get(f"/{base_id}/{table}", params={"maxRecords": max_records})
         r.raise_for_status()
         return r.json()
 
 
 @mcp.tool
-def create_record(base_id: str, table: str, fields: dict) -> dict:
+async def create_record(base_id: str, table: str, fields: dict) -> dict:
     """Create one record. `fields` maps column names to values, e.g. {"Name": "Acme"}."""
-    with _client() as c:
-        r = c.post(f"/{base_id}/{table}", json={"fields": fields})
+    async with httpx.AsyncClient(base_url=AIRTABLE_API, headers=_headers(), timeout=30.0) as c:
+        r = await c.post(f"/{base_id}/{table}", json={"fields": fields})
         r.raise_for_status()
         return r.json()
-
-
-# if __name__ == "__main__":
-#     mcp.run()  # stdio transport by default
-
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -60,4 +63,3 @@ async def health(request: Request) -> PlainTextResponse:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     mcp.run(transport="http", host="0.0.0.0", port=port)
-
