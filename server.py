@@ -18,6 +18,7 @@ auth = OAuthProxy(
     base_url=BASE_URL,
     redirect_path="/auth/callback",
     token_verifier=DebugTokenVerifier(),
+    valid_scopes=["data.records:read", "data.records:write", "schema.bases:read"],
 )
 
 mcp = FastMCP("Airtable MCP", auth=auth)
